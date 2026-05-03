@@ -1,0 +1,78 @@
+package com.animeorigins.managers;
+
+import com.animeorigins.AnimeOriginsPlugin;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+public class CooldownManager {
+
+    private final AnimeOriginsPlugin plugin;
+    // Key format: "uuid:abilityname"
+    private final Map<String, Long> cooldowns = new HashMap<>();
+
+    public CooldownManager(AnimeOriginsPlugin plugin) {
+        this.plugin = plugin;
+    }
+
+    public void setCooldown(UUID player, String ability, int seconds) {
+        cooldowns.put(player + ":" + ability, System.currentTimeMillis() + (seconds * 1000L));
+    }
+
+    public boolean isOnCooldown(UUID player, String ability) {
+        String key = player + ":" + ability;
+        if (!cooldowns.containsKey(key)) return false;
+        if (System.currentTimeMillis() >= cooldowns.get(key)) {
+            cooldowns.remove(key);
+            return false;
+        }
+        return true;
+    }
+
+    public long getRemainingMs(UUID player, String ability) {
+        String key = player + ":" + ability;
+        if (!cooldowns.containsKey(key)) return 0;
+        long remaining = cooldowns.get(key) - System.currentTimeMillis();
+        return Math.max(0, remaining);
+    }
+
+    public int getRemainingSeconds(UUID player, String ability) {
+        return (int) Math.ceil(getRemainingMs(player, ability) / 1000.0);
+    }
+
+    /**
+     * Returns the active cooldown ability for a player (highest remaining),
+     * used for exp bar display.
+     */
+    public String getPrimaryAbility(UUID player) {
+        String best = null;
+        long bestMs = 0;
+        for (Map.Entry<String, Long> entry : cooldowns.entrySet()) {
+            if (entry.getKey().startsWith(player.toString())) {
+                long rem = entry.getValue() - System.currentTimeMillis();
+                if (rem > bestMs) {
+                    bestMs = rem;
+                    best = entry.getKey().substring(player.toString().length() + 1);
+                }
+            }
+        }
+        return best;
+    }
+
+    public Map<String, Long> getPlayerCooldowns(UUID player) {
+        Map<String, Long> result = new HashMap<>();
+        for (Map.Entry<String, Long> entry : cooldowns.entrySet()) {
+            if (entry.getKey().startsWith(player.toString() + ":")) {
+                String ability = entry.getKey().substring(player.toString().length() + 1);
+                long rem = entry.getValue() - System.currentTimeMillis();
+                if (rem > 0) result.put(ability, rem);
+            }
+        }
+        return result;
+    }
+
+    public int getConfiguredCooldown(String ability) {
+        return plugin.getConfig().getInt("cooldowns." + ability, 60);
+    }
+}

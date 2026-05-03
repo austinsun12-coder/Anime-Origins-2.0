@@ -1,0 +1,277 @@
+package com.animeorigins.managers;
+
+import com.animeorigins.AnimeOriginsPlugin;
+import com.animeorigins.Origin;
+import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeModifier;
+import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
+import org.bukkit.entity.Wolf;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+
+public class OriginManager {
+
+    public static final List<String> VALID_ORIGINS = new ArrayList<>();
+
+    static {
+        for (Origin o : Origin.values()) {
+            VALID_ORIGINS.add(o.name().toLowerCase());
+        }
+    }
+
+    private final AnimeOriginsPlugin plugin;
+    private final Map<UUID, Origin> playerOrigins = new HashMap<>();
+    private File dataFile;
+    private FileConfiguration dataConfig;
+
+    public OriginManager(AnimeOriginsPlugin plugin) {
+        this.plugin = plugin;
+        loadData();
+    }
+
+    private void loadData() {
+        dataFile = new File(plugin.getDataFolder(), "playerdata.yml");
+        if (!dataFile.exists()) {
+            try { dataFile.createNewFile(); } catch (IOException e) { e.printStackTrace(); }
+        }
+        dataConfig = YamlConfiguration.loadConfiguration(dataFile);
+        if (dataConfig.contains("origins")) {
+            for (String key : dataConfig.getConfigurationSection("origins").getKeys(false)) {
+                try {
+                    UUID uuid = UUID.fromString(key);
+                    String originName = dataConfig.getString("origins." + key);
+                    Origin origin = Origin.fromString(originName);
+                    if (origin != null) {
+                        playerOrigins.put(uuid, origin);
+                    }
+                } catch (IllegalArgumentException ignored) {}
+            }
+        }
+    }
+
+    public void saveAll() {
+        for (Map.Entry<UUID, Origin> entry : playerOrigins.entrySet()) {
+            dataConfig.set("origins." + entry.getKey().toString(), entry.getValue().name());
+        }
+        try { dataConfig.save(dataFile); } catch (IOException e) { e.printStackTrace(); }
+    }
+
+    public Origin getOrigin(Player player) {
+        return playerOrigins.get(player.getUniqueId());
+    }
+
+    public void setOrigin(Player player, String originName) {
+        // Remove old origin effects first
+        removeOriginEffects(player);
+
+        Origin origin = Origin.fromString(originName);
+        if (origin == null) return;
+
+        playerOrigins.put(player.getUniqueId(), origin);
+        dataConfig.set("origins." + player.getUniqueId(), origin.name());
+        try { dataConfig.save(dataFile); } catch (IOException e) { e.printStackTrace(); }
+
+        applyOriginEffects(player, origin);
+    }
+
+    public void setOrigin(Player player, Origin origin) {
+        removeOriginEffects(player);
+        playerOrigins.put(player.getUniqueId(), origin);
+        dataConfig.set("origins." + player.getUniqueId(), origin.name());
+        try { dataConfig.save(dataFile); } catch (IOException e) { e.printStackTrace(); }
+        applyOriginEffects(player, origin);
+    }
+
+    public void removeOrigin(Player player) {
+        removeOriginEffects(player);
+        playerOrigins.remove(player.getUniqueId());
+        dataConfig.set("origins." + player.getUniqueId(), null);
+        try { dataConfig.save(dataFile); } catch (IOException e) { e.printStackTrace(); }
+    }
+
+    public void applyOriginEffects(Player player, Origin origin) {
+        // Remove any previous scale modifiers
+        clearScaleModifier(player);
+        player.clearActivePotionEffects();
+
+        switch (origin) {
+            case YUJI -> {
+                player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, Integer.MAX_VALUE, 0, false, false, true));
+                player.addPotionEffect(new PotionEffect(PotionEffectType.JUMP_BOOST, Integer.MAX_VALUE, 0, false, false, true));
+                player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, Integer.MAX_VALUE, 1, false, false, true));
+            }
+            case SAITAMA -> {
+                // No permanent potion effects — indestructible handled in damage listener
+            }
+            case GOKU -> {
+                // Saiyan blood handled in damage listener
+            }
+            case LUFFY -> {
+                // Reach is handled via generic reach attribute
+                applyReachModifier(player, 3.0);
+            }
+            case EREN -> {
+                player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, Integer.MAX_VALUE, 0, false, false, true));
+            }
+            case NARUTO -> {
+                player.addPotionEffect(new PotionEffect(PotionEffectType.JUMP_BOOST, Integer.MAX_VALUE, 1, false, false, true));
+                player.addPotionEffect(new PotionEffect(PotionEffectType.SPEED, Integer.MAX_VALUE, 0, false, false, true));
+            }
+            case L -> {
+                // Health cap handled in passive task
+                setMaxHealth(player, 12.0); // 6 hearts
+            }
+            case LIGHT -> {
+                setMaxHealth(player, 16.0); // 8 hearts
+            }
+            case ASH -> {
+                setMaxHealth(player, 14.0); // 7 hearts
+            }
+            case LEBRON -> {
+                player.addPotionEffect(new PotionEffect(PotionEffectType.JUMP_BOOST, Integer.MAX_VALUE, 2, false, false, true));
+                applyScaleModifier(player, 0.2); // 1.2x scale
+            }
+            default -> {}
+        }
+
+        // Notify player
+        player.sendMessage("§aYou are now playing as: " + origin.getDisplayName());
+        sendOriginInfo(player, origin);
+    }
+
+    private void removeOriginEffects(Player player) {
+        clearScaleModifier(player);
+        clearReachModifier(player);
+        setMaxHealth(player, 20.0);
+        player.clearActivePotionEffects();
+        if (player.getHealth() > 20.0) player.setHealth(20.0);
+    }
+
+    public void applyScaleModifier(Player player, double addAmount) {
+        var attr = player.getAttribute(Attribute.SCALE);
+        if (attr == null) return;
+        clearScaleModifier(player);
+        attr.addModifier(new AttributeModifier(
+                new org.bukkit.NamespacedKey(plugin, "anime_scale"),
+                addAmount,
+                AttributeModifier.Operation.ADD_NUMBER
+        ));
+    }
+
+    public void setScaleMultiplier(Player player, double multiplier) {
+        var attr = player.getAttribute(Attribute.SCALE);
+        if (attr == null) return;
+        clearScaleModifier(player);
+        // Scale = base(1.0) * multiplier => add (multiplier - 1.0) with MULTIPLY_SCALAR_1
+        attr.addModifier(new AttributeModifier(
+                new org.bukkit.NamespacedKey(plugin, "anime_scale"),
+                multiplier - 1.0,
+                AttributeModifier.Operation.MULTIPLY_SCALAR_1
+        ));
+    }
+
+    public void clearScaleModifier(Player player) {
+        var attr = player.getAttribute(Attribute.SCALE);
+        if (attr == null) return;
+        attr.getModifiers().stream()
+                .filter(m -> m.getKey().getKey().equals("anime_scale"))
+                .findFirst()
+                .ifPresent(attr::removeModifier);
+    }
+
+    public void applyReachModifier(Player player, double blocks) {
+        var blockAttr = player.getAttribute(Attribute.BLOCK_INTERACTION_RANGE);
+        var entityAttr = player.getAttribute(Attribute.ENTITY_INTERACTION_RANGE);
+        if (blockAttr != null) {
+            blockAttr.addModifier(new AttributeModifier(
+                    new org.bukkit.NamespacedKey(plugin, "anime_block_reach"),
+                    blocks,
+                    AttributeModifier.Operation.ADD_NUMBER
+            ));
+        }
+        if (entityAttr != null) {
+            entityAttr.addModifier(new AttributeModifier(
+                    new org.bukkit.NamespacedKey(plugin, "anime_entity_reach"),
+                    blocks,
+                    AttributeModifier.Operation.ADD_NUMBER
+            ));
+        }
+    }
+
+    public void clearReachModifier(Player player) {
+        var blockAttr = player.getAttribute(Attribute.BLOCK_INTERACTION_RANGE);
+        var entityAttr = player.getAttribute(Attribute.ENTITY_INTERACTION_RANGE);
+        if (blockAttr != null) {
+            blockAttr.getModifiers().stream()
+                    .filter(m -> m.getKey().getKey().equals("anime_block_reach"))
+                    .forEach(blockAttr::removeModifier);
+        }
+        if (entityAttr != null) {
+            entityAttr.getModifiers().stream()
+                    .filter(m -> m.getKey().getKey().equals("anime_entity_reach"))
+                    .forEach(entityAttr::removeModifier);
+        }
+    }
+
+    public void addReachModifier(Player player, double blocks, String key) {
+        var blockAttr = player.getAttribute(Attribute.BLOCK_INTERACTION_RANGE);
+        var entityAttr = player.getAttribute(Attribute.ENTITY_INTERACTION_RANGE);
+        if (blockAttr != null) {
+            blockAttr.addModifier(new AttributeModifier(
+                    new org.bukkit.NamespacedKey(plugin, key + "_block"),
+                    blocks, AttributeModifier.Operation.ADD_NUMBER));
+        }
+        if (entityAttr != null) {
+            entityAttr.addModifier(new AttributeModifier(
+                    new org.bukkit.NamespacedKey(plugin, key + "_entity"),
+                    blocks, AttributeModifier.Operation.ADD_NUMBER));
+        }
+    }
+
+    public void removeReachModifier(Player player, String key) {
+        var blockAttr = player.getAttribute(Attribute.BLOCK_INTERACTION_RANGE);
+        var entityAttr = player.getAttribute(Attribute.ENTITY_INTERACTION_RANGE);
+        if (blockAttr != null) {
+            blockAttr.getModifiers().stream()
+                    .filter(m -> m.getKey().getKey().equals(key + "_block"))
+                    .forEach(blockAttr::removeModifier);
+        }
+        if (entityAttr != null) {
+            entityAttr.getModifiers().stream()
+                    .filter(m -> m.getKey().getKey().equals(key + "_entity"))
+                    .forEach(entityAttr::removeModifier);
+        }
+    }
+
+    private void setMaxHealth(Player player, double maxHp) {
+        var attr = player.getAttribute(Attribute.MAX_HEALTH);
+        if (attr == null) return;
+        attr.setBaseValue(maxHp);
+        if (player.getHealth() > maxHp) player.setHealth(maxHp);
+    }
+
+    public void restoreMaxHealth(Player player) {
+        setMaxHealth(player, 20.0);
+    }
+
+    private void sendOriginInfo(Player player, Origin origin) {
+        player.sendMessage("§8§m------------------------------");
+        player.sendMessage(origin.getDisplayName() + " §8- " + origin.getSeries());
+        player.sendMessage("§8§m------------------------------");
+        for (String ability : origin.getAbilities()) {
+            player.sendMessage("  " + ability);
+        }
+        player.sendMessage("§8§m------------------------------");
+        player.sendMessage("§7Primary ability: §fCrouch + Left-Click");
+        player.sendMessage("§7Secondary ability: §fCrouch + Right-Click");
+        player.sendMessage("§7Cooldowns shown in §fEXP bar§7.");
+    }
+
+    public Map<UUID, Origin> getAllOrigins() { return playerOrigins; }
+}
